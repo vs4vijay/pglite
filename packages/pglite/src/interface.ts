@@ -22,6 +22,8 @@ export interface ExecProtocolOptions {
 export interface PGliteOptions {
   debug?: DebugLevel;
   relaxedDurability?: boolean;
+  wasmModule?: WebAssembly.Module;
+  fsDataBinary?: ArrayBuffer;
 }
 
 export interface PGliteInterface {

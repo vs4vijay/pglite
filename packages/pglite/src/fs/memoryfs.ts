@@ -10,8 +10,12 @@ import type { DebugLevel } from "../index.js";
 export class MemoryFS extends FilesystemBase {
   initModule?: any;
 
-  async init(debug?: DebugLevel) {
-    this.initModule = await initDb(undefined, debug);
+  async init(
+    debug?: DebugLevel,
+    wasmModule?: WebAssembly.Module,
+    fsDataBinary?: ArrayBuffer,
+  ) {
+    this.initModule = await initDb(undefined, debug, wasmModule, fsDataBinary);
     return true;
   }
 

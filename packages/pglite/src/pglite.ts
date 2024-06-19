@@ -50,6 +50,9 @@ export class PGlite implements PGliteInterface {
   #fsSyncMutex = new Mutex();
   #fsSyncScheduled = false;
 
+  #wasmModule?: WebAssembly.Module;
+  #fsDataBinary?: ArrayBuffer;
+
   readonly debug: DebugLevel = 0;
 
   #parser = new Parser();
@@ -84,6 +87,10 @@ export class PGlite implements PGliteInterface {
       this.#resultAccumulator.push(e.detail);
     });
 
+    // Save the binary data for the filesystem and the wasm module
+    this.#wasmModule = options?.wasmModule;
+    this.#fsDataBinary = options?.fsDataBinary;
+
     // Initialize the database, and store the promise so we can wait for it to be ready
     this.waitReady = this.#init();
   }
@@ -106,7 +113,12 @@ export class PGlite implements PGliteInterface {
       // Initialize the filesystem
       // returns true if this is the first run, we then need to perform
       // additional setup steps at the end of the init.
-      firstRun = await this.fs.init(this.debug);
+      // @ts-ignore
+      firstRun = await this.fs.init(
+        this.debug,
+        this.#wasmModule,
+        this.#fsDataBinary,
+      );
 
       let emscriptenOpts: Partial<EmPostgres> = {
         arguments: [
@@ -126,23 +138,62 @@ export class PGlite implements PGliteInterface {
           "/pgdata",
           "template1",
         ],
-        locateFile: await makeLocateFile(),
         ...(this.debug > 0
           ? { print: console.info, printErr: console.error }
           : { print: () => {}, printErr: () => {} }),
         onRuntimeInitialized: async (Module: EmPostgres) => {
           await this.fs!.initialSyncFs(Module.FS);
-          this.#ready = true;
-          resolve();
         },
         eventTarget: this.#eventTarget,
         Event: PGEvent,
       };
 
+      if (this.#wasmModule) {
+        // @ts-ignore
+        emscriptenOpts.instantiateWasm = async (imports, successCallback) => {
+          // @ts-ignore
+          const instance = WebAssembly.instantiate(
+            this.#wasmModule!,
+            imports,
+          ).then((instance) => {
+            successCallback(instance);
+          });
+          return {};
+        };
+      }
+      if (this.#fsDataBinary) {
+        // @ts-ignore
+        emscriptenOpts.getPreloadedPackage = (
+          remotePackageName,
+          remotePackageSize,
+        ) => {
+          // @ts-ignore
+          if (remotePackageName === "share.data") {
+            // return array buffer
+            return this.#fsDataBinary;
+          } else {
+            throw new Error("Unknown package name: " + remotePackageName);
+          }
+        };
+      }
+
+      if (!this.#wasmModule && !this.#fsDataBinary) {
+        emscriptenOpts.locateFile = await makeLocateFile();
+      } else {
+        emscriptenOpts.locateFile = (f) => f;
+      }
+
       emscriptenOpts = await this.fs.emscriptenOpts(emscriptenOpts);
       const emp = await EmPostgresFactory(emscriptenOpts);
+
+      // @ts-ignore
+      await emp.ready;
       this.emp = emp;
+      this.#ready = true;
+      resolve();
     });
+
+    await this.emp.ready;
 
     if (firstRun) {
       await this.#firstRun();

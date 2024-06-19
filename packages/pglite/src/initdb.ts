@@ -37,7 +37,12 @@ export const FILES = [
   "pg_hba.conf",
 ];
 
-export async function initDb(dataDir?: string, debug?: DebugLevel) {
+export async function initDb(
+  dataDir?: string,
+  debug?: DebugLevel,
+  wasmModule?: WebAssembly.Module,
+  fsDataBinary?: ArrayBuffer,
+) {
   const debugMode = debug !== undefined && debug > 0;
 
   const emscriptenOpts: Partial<EmPostgres> = {
@@ -58,7 +63,6 @@ export async function initDb(dataDir?: string, debug?: DebugLevel) {
         mod.FS.writeFile(PGDATA + "/base/1/PG_VERSION", "15devel");
       },
     ],
-    locateFile: await makeLocateFile(),
     ...(debugMode
       ? { print: console.info, printErr: console.error }
       : { print: () => {}, printErr: () => {} }),
@@ -74,6 +78,39 @@ export async function initDb(dataDir?: string, debug?: DebugLevel) {
       PGDATA,
     ],
   };
+
+  if (wasmModule) {
+    // @ts-ignore
+    emscriptenOpts.instantiateWasm = async (imports, successCallback) => {
+      // @ts-ignore
+      const instance = WebAssembly.instantiate(wasmModule!, imports).then(
+        (instance) => {
+          successCallback(instance);
+        },
+      );
+      return {};
+    };
+  }
+  if (fsDataBinary) {
+    // @ts-ignore
+    emscriptenOpts.getPreloadedPackage = (
+      remotePackageName,
+      remotePackageSize,
+    ) => {
+      if (remotePackageName === "share.data") {
+        // return array buffer
+        return fsDataBinary;
+      } else {
+        throw new Error("Unknown package name: " + remotePackageName);
+      }
+    };
+  }
+
+  if (!wasmModule && !fsDataBinary) {
+    emscriptenOpts.locateFile = await makeLocateFile();
+  } else {
+    emscriptenOpts.locateFile = (f) => f;
+  }
 
   const { require } = await nodeValues();
 
