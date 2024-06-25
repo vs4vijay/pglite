@@ -13,6 +13,7 @@ import type { Response } from "./types";
 import { runQuery, getSchema } from "./utils";
 import { ReplResponse } from "./ReplResponse";
 import { xcodeDark, xcodeLight } from "@uiw/codemirror-theme-xcode";
+import { uploadButtonPlugin } from "./uploadButton";
 
 import "./Repl.css";
 
@@ -21,6 +22,7 @@ import "./Repl.css";
 // We keep the up and down arrow keys as we only override their behavior
 // when the cursor is on the first or last line.
 const baseKeymap = defaultKeymap.filter((key) => key.key !== "Enter");
+const originalEnterKey = defaultKeymap.find((key) => key.key === "Enter");
 
 export type ReplTheme = "light" | "dark" | "auto";
 
@@ -50,6 +52,9 @@ export function Repl({
     theme === "dark" ? darkTheme : lightTheme
   );
   const [styles, setStyles] = useState<{ [key: string]: string | number }>({});
+  const [showFile, setShowFile] = useState(false);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  const [file, setFile] = useState<File>();
 
   useEffect(() => {
     if (theme === "auto") {
@@ -83,20 +88,35 @@ export function Repl({
   const onChange = useCallback((val: string, _viewUpdate: ViewUpdate) => {
     extractStyles();
     setValue(val);
+    checkShowFile(val);
     if (historyPos.current === -1) {
       valueNoHistory.current = val;
     }
   }, []);
 
+  const checkShowFile = useCallback((val: string) => {
+    const regex = /from\s*'\/dev\/blob'/i;
+    if (val.match(regex)) {
+      setShowFile(true);
+    } else {
+      setShowFile(false);
+    }
+  }, []);
+
   const extensions = useMemo(
     () => [
+      uploadButtonPlugin(fileInput),
       keymap.of([
         {
           key: "Enter",
           preventDefault: true,
           run: () => {
             if (value.trim() === "") return false; // Do nothing if the input is empty
-            runQuery(value, pg).then((response) => {
+            let file;
+            if (fileInput.current && showFile) {
+              file = fileInput.current.files?.[0];
+            }
+            runQuery(value, pg, file).then((response) => {
               setOutput((prev) => [...prev, response]);
               if (outputRef.current) {
                 setTimeout(() => {
@@ -110,8 +130,13 @@ export function Repl({
             historyPos.current = -1;
             valueNoHistory.current = "";
             setValue("");
+            setShowFile(false);
             return true;
           },
+        },
+        {
+          ...originalEnterKey!,
+          key: "Shift-Enter",
         },
         {
           key: "ArrowUp",
@@ -184,7 +209,7 @@ export function Repl({
         defaultSchema: "public",
       }),
     ],
-    [pg, schema, value, output]
+    [pg, schema, value, output, fileInput.current, file]
   );
 
   const extractStyles = () => {
@@ -249,6 +274,11 @@ export function Repl({
           getSchema(pg).then(setSchema);
         }}
       />
+      {showFile && (
+        <div className="PGliteRepl-file">
+          <input type="file" ref={fileInput} onChange={() => setFile(fileInput.current?.files?.[0])} />
+        </div>
+      )}
     </div>
   );
 }
