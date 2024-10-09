@@ -11,7 +11,7 @@ export interface LiveChangesOptions<T = { [key: string]: any }> {
   query: string
   params?: any[] | null
   key: string
-  callback: (changes: Array<Change<T>>) => void
+  callback?: (changes: Array<Change<T>>) => void
   signal?: AbortSignal
 }
 
@@ -19,7 +19,7 @@ export interface LiveIncrementalQueryOptions<T = { [key: string]: any }> {
   query: string
   params?: any[] | null
   key: string
-  callback: (results: Results<T>) => void
+  callback?: (results: Results<T>) => void
   signal?: AbortSignal
 }
 
