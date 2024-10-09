@@ -82,6 +82,9 @@ const setup = async (pg: PGliteInterface, _emscriptenOpts: any) => {
 
       // Function to refresh the query
       const refresh = async (count = 0) => {
+        if (callbacks.length === 0) {
+          return
+        }
         try {
           results = await pg.query<T>(`EXECUTE live_query_${id}_get;`)
         } catch (e) {
@@ -302,6 +305,9 @@ const setup = async (pg: PGliteInterface, _emscriptenOpts: any) => {
       await init()
 
       const refresh = async () => {
+        if (callbacks.length === 0) {
+          return
+        }
         let reset = false
         for (let i = 0; i < 5; i++) {
           try {

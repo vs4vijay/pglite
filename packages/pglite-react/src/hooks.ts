@@ -19,13 +19,24 @@ function paramsEqual(
 }
 
 function useLiveQueryImpl<T = { [key: string]: unknown }>(
-  query: string,
+  query: string | LiveQuery<T> | Promise<LiveQuery<T>>,
   params: unknown[] | undefined | null,
   key?: string,
 ): Omit<Results<T>, 'affectedRows'> | undefined {
   const db = usePGlite()
-  const [results, setResults] = useState<Results<T>>()
   const paramsRef = useRef(params)
+  const [liveQueryFromPromise, setLiveQueryFromPromise] = useState<
+    LiveQuery<T> | undefined
+  >()
+  let liveQuery: LiveQuery<T> | undefined
+  if (!(typeof query === 'string') && !(query instanceof Promise)) {
+    liveQuery = query
+  } else if (liveQueryFromPromise) {
+    liveQuery = liveQueryFromPromise
+  }
+  const [results, setResults] = useState<Results<T> | undefined>(
+    liveQuery?.initialResults,
+  )
 
   let currentParams = paramsRef.current
   if (!paramsEqual(paramsRef.current, params)) {
@@ -39,67 +50,43 @@ function useLiveQueryImpl<T = { [key: string]: unknown }>(
       if (cancelled) return
       setResults(results)
     }
-    const ret =
-      key !== undefined
-        ? db.live.incrementalQuery<T>(query, currentParams, key, cb)
-        : db.live.query<T>(query, currentParams, cb)
+    if (typeof query === 'string') {
+      const ret =
+        key !== undefined
+          ? db.live.incrementalQuery<T>(query, currentParams, key, cb)
+          : db.live.query<T>(query, currentParams, cb)
 
-    return () => {
-      cancelled = true
-      ret.then(({ unsubscribe }) => unsubscribe())
+      return () => {
+        cancelled = true
+        ret.then(({ unsubscribe }) => unsubscribe())
+      }
+    } else if (query instanceof Promise) {
+      query.then((liveQuery) => {
+        if (cancelled) return
+        setLiveQueryFromPromise(liveQuery)
+      })
+      return () => {
+        cancelled = true
+        liveQuery?.unsubscribe(cb)
+      }
+    } else if (liveQuery) {
+      setResults(liveQuery.initialResults)
+      liveQuery.subscribe(cb)
+      return () => {
+        cancelled = true
+        liveQuery.unsubscribe(cb)
+      }
+    } else {
+      throw new Error('Should never happen')
     }
-  }, [db, key, query, currentParams])
+  }, [db, key, query, currentParams, liveQuery])
+
   return (
     results && {
       rows: results.rows,
       fields: results.fields,
     }
   )
-}
-
-function useLiveQueryResult<T = { [key: string]: unknown }>(
-  liveQuery: LiveQuery<T>,
-): Results<T> | undefined {
-  const [results, setResults] = useState<Results<T>>(liveQuery.initialResults)
-  useEffect(() => {
-    setResults(liveQuery.initialResults)
-    const cb = (results: Results<T>) => {
-      setResults(results)
-    }
-    liveQuery.subscribe(cb)
-    return () => {
-      liveQuery.unsubscribe(cb)
-    }
-  }, [liveQuery])
-  return results
-}
-
-function useLiveQueryPromise<T = { [key: string]: unknown }>(
-  liveQueryPromise: Promise<LiveQuery<T>>,
-): Results<T> | undefined {
-  const [results, setResults] = useState<Results<T>>()
-  const [liveQuery, setLiveQuery] = useState<LiveQuery<T>>()
-  useEffect(() => {
-    liveQueryPromise.then((liveQuery) => {
-      setLiveQuery(liveQuery)
-    })
-  }, [liveQueryPromise])
-  useEffect(() => {
-    if (liveQuery) {
-      setResults(liveQuery.initialResults)
-      const cb = (results: Results<T>) => {
-        setResults(results)
-      }
-      liveQuery.subscribe(cb)
-      return () => {
-        liveQuery.unsubscribe(cb)
-      }
-    } else {
-      setResults(undefined)
-      return () => {}
-    }
-  }, [liveQuery])
-  return results
 }
 
 export function useLiveQuery<T = { [key: string]: unknown }>(
@@ -119,13 +106,7 @@ export function useLiveQuery<T = { [key: string]: unknown }>(
   query: string | LiveQuery<T> | Promise<LiveQuery<T>>,
   params?: unknown[] | null,
 ): Results<T> | undefined {
-  if (typeof query === 'string') {
-    return useLiveQueryImpl<T>(query, params)
-  } else if (query instanceof Promise) {
-    return useLiveQueryPromise<T>(query)
-  } else {
-    return useLiveQueryResult<T>(query)
-  }
+  return useLiveQueryImpl<T>(query, params)
 }
 
 useLiveQuery.sql = function <T = { [key: string]: unknown }>(
