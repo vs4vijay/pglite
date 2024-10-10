@@ -576,8 +576,8 @@ export type PGliteWithLive = PGliteInterface & {
 }
 
 /**
- * Get a list of all the tables used in a view
- * @param tx a transaction or or PGlite instance
+ * Get a list of all the tables used in a view, recursively
+ * @param tx a transaction or PGlite instance
  * @param viewName the name of the view
  * @returns list of tables used in the view
  */
@@ -585,15 +585,19 @@ async function getTablesForView(
   tx: Transaction | PGliteInterface,
   viewName: string,
 ): Promise<{ table_name: string; schema_name: string }[]> {
-  return (
-    await tx.query<{
+  const tables = new Map<string, { table_name: string; schema_name: string }>()
+
+  async function getTablesRecursive(currentViewName: string) {
+    const result = await tx.query<{
       table_name: string
       schema_name: string
+      is_view: boolean
     }>(
       `
         SELECT DISTINCT
           cl.relname AS table_name,
-          n.nspname AS schema_name
+          n.nspname AS schema_name,
+          cl.relkind = 'v' AS is_view
         FROM pg_rewrite r
         JOIN pg_depend d ON r.oid = d.objid
         JOIN pg_class cl ON d.refobjid = cl.oid
@@ -604,9 +608,27 @@ async function getTablesForView(
         )
         AND d.deptype = 'n';
       `,
-      [viewName],
+      [currentViewName],
     )
-  ).rows.filter((row) => row.table_name !== viewName)
+
+    for (const row of result.rows) {
+      if (row.table_name !== currentViewName && !row.is_view) {
+        const tableKey = `"${row.schema_name}"."${row.table_name}"`
+        if (!tables.has(tableKey)) {
+          tables.set(tableKey, {
+            table_name: row.table_name,
+            schema_name: row.schema_name,
+          })
+        }
+      } else if (row.is_view) {
+        await getTablesRecursive(row.table_name)
+      }
+    }
+  }
+
+  await getTablesRecursive(viewName)
+
+  return Array.from(tables.values())
 }
 
 /**
