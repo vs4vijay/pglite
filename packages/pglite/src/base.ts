@@ -32,6 +32,7 @@ export abstract class BasePGlite
 
   // # Private properties:
   #inTransaction = false
+  #concurrentQueryMutex = new Map<string, Promise<any>>()
 
   // # Abstract methods:
 
@@ -142,7 +143,7 @@ export abstract class BasePGlite
     // only one query can be executed at a time and not concurrently with a
     // transaction.
     return await this._runExclusiveTransaction(async () => {
-      return await this.#runQuery<T>(query, params, options)
+      return await this.#runConcurrentQuery<T>(query, params, options)
     })
   }
 
@@ -391,5 +392,28 @@ export abstract class BasePGlite
     if (this.debug > 0) {
       console.log(...args)
     }
+  }
+
+  /**
+   * Run a query concurrently
+   * @param query The query to execute
+   * @param params Optional parameters for the query
+   * @returns The result of the query
+   */
+  async #runConcurrentQuery<T>(
+    query: string,
+    params?: any[],
+    options?: QueryOptions,
+  ): Promise<Results<T>> {
+    const key = JSON.stringify({ query, params, options })
+    if (!this.#concurrentQueryMutex.has(key)) {
+      this.#concurrentQueryMutex.set(
+        key,
+        this.#runQuery(query, params, options).finally(() => {
+          this.#concurrentQueryMutex.delete(key)
+        }),
+      )
+    }
+    return this.#concurrentQueryMutex.get(key)!
   }
 }

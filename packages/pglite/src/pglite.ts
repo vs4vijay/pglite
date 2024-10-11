@@ -763,4 +763,48 @@ export class PGlite
   _runExclusiveTransaction<T>(fn: () => Promise<T>): Promise<T> {
     return this.#transactionMutex.runExclusive(fn)
   }
+
+  /**
+   * Execute a single SQL statement
+   * This uses the "Extended Query" postgres wire protocol message.
+   * @param query The query to execute
+   * @param params Optional parameters for the query
+   * @returns The result of the query
+   */
+  async query<T>(
+    query: string,
+    params?: any[],
+    options?: QueryOptions,
+  ): Promise<Results<T>> {
+    await this._checkReady()
+    // We wrap the public query method in the transaction mutex to ensure that
+    // only one query can be executed at a time and not concurrently with a
+    // transaction.
+    return await this._runExclusiveTransaction(async () => {
+      return await this.#runConcurrentQuery<T>(query, params, options)
+    })
+  }
+
+  /**
+   * Run a query concurrently
+   * @param query The query to execute
+   * @param params Optional parameters for the query
+   * @returns The result of the query
+   */
+  async #runConcurrentQuery<T>(
+    query: string,
+    params?: any[],
+    options?: QueryOptions,
+  ): Promise<Results<T>> {
+    const key = JSON.stringify({ query, params, options })
+    if (!this.#concurrentQueryMutex.has(key)) {
+      this.#concurrentQueryMutex.set(
+        key,
+        this.#runQuery(query, params, options).finally(() => {
+          this.#concurrentQueryMutex.delete(key)
+        }),
+      )
+    }
+    return this.#concurrentQueryMutex.get(key)!
+  }
 }
